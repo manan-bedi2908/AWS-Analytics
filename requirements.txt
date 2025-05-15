@@ -11,7 +11,3 @@ dotenv
 numpy
 openpyxl
 google-generativeai
-langchain
-langchain-community
-tiktoken
-langchain-openai

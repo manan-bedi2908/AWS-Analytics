@@ -1,0 +1,17 @@
+streamlit
+openai==0.28
+pandas
+matplotlib
+fpdf
+prophet
+sentence-transformers
+scikit-learn
+plotly
+dotenv
+numpy
+openpyxl
+google-generativeai
+langchain
+langchain-community
+tiktoken
+langchain-openai

@@ -1,5 +1,5 @@
 streamlit
-openai==0.28
+openai
 pandas
 matplotlib
 fpdf
@@ -11,3 +11,6 @@ dotenv
 numpy
 openpyxl
 google-generativeai
+fpdf2
+markdown2
+xhtml2pdf

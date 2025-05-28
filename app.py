@@ -6,6 +6,8 @@ import smtplib # For sending emails
 from email.mime.text import MIMEText # For creating email messages
 from email.mime.multipart import MIMEMultipart # For creating email messages
 from email.mime.application import MIMEApplication # For PDF attachments
+from openai.types.error import OpenAIError
+from openai.error import OpenAIError
 # For PDF Generation
 import markdown2 # For converting markdown to HTML (pip install markdown2)
 from xhtml2pdf import pisa # For converting HTML to PDF (pip install xhtml2pdf)
@@ -50,96 +52,100 @@ if 'uploaded_file_name_for_subject' not in st.session_state: # To store filename
 # System prompt (as defined in the Canvas)
 SYS_PROMPT = """
 **Objective:**
-Analyze the provided AWS Cost dataset (e.g., from Book1.xlsx - Sheet1.csv) to extract critical financial signals and insights for May. Focus on account spending dynamics, adherence to AOP, and significant cost variations by directly utilizing the provided daily average metrics. The insights should be actionable and relevant for financial leadership (CFO perspective).
+Analyze the provided AWS Cost dataset to extract critical financial signals and insights for the current period (e.g., May). Focus on identifying material account spending dynamics, significant deviations from AOP (Annual Operating Plan), and notable cost variations compared to previous periods, by directly utilizing the provided daily average metrics. The insights must be actionable, highlight potential risks and opportunities, and be presented from a CFO's perspective.
 
 **Key Columns to Use from Your Dataset:**
 * **Account Identifier:** `Linked Account Name` (primary for reporting), `Linked Account ID`, `Account Number`
 * **Contextual/Segmentation (Optional):** `P&L`, `Owner`, or any column representing 'Nature' or 'Category'.
-* **AOP/Budget Data for May:** `AOP Daily average May`
-* **Actual Spending Data for May:** `Actual Daily average May`
+* **AOP/Budget Data for Current Period (e.g., May):** `AOP Daily average May`
+* **Actual Spending Data for Current Period (e.g., May):** `Actual Daily average May`
 * **Previous Period Benchmark:** `Actual Daily average Last month MTD`
-* **(Note on other columns):** The dataset also contains `AOP Daily average May Best` and `Actual Daily average Last full month day wise data...`. These can be used for supplementary context if relevant, or if specific follow-up questions address them.
+* **(Note on other columns):** The dataset may also contain columns like `AOP Daily average May Best` and `Actual Daily average Last full month day wise data...`. These can be used for supplementary context if relevant, or if specific follow-up questions address them.
 
-**Key Areas of Inquiry & Insights (Focusing on May data, using provided daily averages):**
+**Key Areas of Inquiry & Insights (Focusing on Current Period data, using provided daily averages):**
 
 0.  **Overall Spending Trend (Absolute Daily Averages):**
-    * Calculate the sum of the column `Actual Daily average May` across all accounts to get the "Total Overall Actual Daily Spend for May." NOT AOP. You'll be penalized for using that
-    * Calculate the sum of `Actual Daily average Last month MTD` across all accounts to get the "Total Overall Actual Daily Spend for Last Month MTD."
-    * Report these two absolute numbers and the difference between them.
-    * Comment on the overall month-over-month trend in daily spending for the entire portfolio.
+    * Calculate the sum of `Actual Daily average May` across all accounts to get the "Average Actual Daily Spend for May."
+    * Calculate the sum of `Actual Daily average Last month MTD` across all accounts to get the "Average Actual Daily Spend for Last Month MTD."
+    * Report these two absolute numbers and the difference between them (both absolute and percentage change).
+    * Comment on the overall month-over-month trend in daily spending for the entire portfolio. Is the overall daily spend increasing or decreasing, and by how much?
 
-1.  **Top Spending Accounts (Based on May Daily Average):**
-    * Using `Linked Account Name`, identify accounts with the highest `Actual Daily average May`.
-    * Comment on the concentration of spend if any particular accounts dominate.
-    * If a 'Nature' or 'Category' column (e.g., `P&L`) is available, identify if top spending accounts are concentrated in specific categories/natures.
+1.  **Key Spending Drivers & Material Anomalies (Based on Current Period Daily Average):**
+    * Using `Linked Account Name`, identify accounts that are the most significant contributors (key drivers) to the `Actual Daily average May`. This is not limited to a fixed number of accounts; focus on materiality.
+    * **Crucially, identify and highlight any anomalies in spending patterns across *all* accounts.** This includes accounts with historically low spend suddenly appearing high, disproportionate spend compared to their usual profile (if discernible from provided data or context), or any other unexpected deviations.
+    * Comment on the concentration of spend: do a few accounts or categories disproportionately drive the total spend?
+    * If a 'Nature' or 'Category' column (e.g., `P&L`) is available, analyze if spending drivers or anomalies are concentrated in specific categories/natures.
 
-2.  **Performance vs. AOP (Based on May Daily Averages):**
+2.  **Performance vs. AOP (Critical Focus on Overages - Based on Current Period Daily Averages):**
     * For each `Linked Account Name`, compare its `Actual Daily average May` directly with its `AOP Daily average May`.
     * Calculate the variance (Actual Daily Avg - AOP Daily Avg) in both absolute daily amount and percentage.
-    * Highlight accounts with significant positive variances (daily average spend considerably below AOP daily average) and significant negative variances (daily average spend considerably above AOP daily average).
-    * Explain what makes these variances "significant" from a CFO's perspective (e.g., large percentage deviation impacting budget adherence, high absolute daily overspend, consistent trend across multiple high-value accounts).
-    * If a 'Nature' or 'Category' column is available, summarize AOP performance at this category level. Which categories are most over/under budget based on daily averages?
+    * **Your primary focus must be to identify and thoroughly analyze accounts where `Actual Daily average May` *significantly exceeds* `AOP Daily average May`.** These are critical AOP exceedances.
+    * Explain what makes these overages "significant" from a CFO's perspective (e.g., high percentage deviation leading to budget overrun, large absolute daily overspend impacting cash flow, consistent overspending trend, risk to financial targets).
+    * While noting accounts well under AOP is useful for context, the emphasis is on over-budget scenarios.
+    * If a 'Nature' or 'Category' column is available, summarize AOP overage performance at this category level. Which categories are most significantly over budget based on daily averages?
 
-3.  **Month-over-Month Spending Dynamics (Comparison of Daily Averages):**
+3.  **Month-over-Month Spending Dynamics (Critical Focus on Sudden Hikes - Comparison of Daily Averages):**
     * For each `Linked Account Name`, compare its `Actual Daily average May` with its `Actual Daily average Last month MTD`.
-    * Pinpoint accounts exhibiting notable increases ("sudden hikes") or decreases in their daily spending average.
-    * For these accounts, quantify the change (percentage and absolute daily average amount).
-    * Explain the potential implications of these changes (e.g., escalating costs needing control, positive cost management trends, potential shifts in operational activity).
-    * If a 'Nature' or 'Category' column is available, analyze month-over-month dynamics at this category level. Which categories are driving the most significant increases or decreases in daily spend?
+    * **Your primary focus must be to identify and thoroughly analyze accounts exhibiting notable *increases* ("sudden hikes") in their daily spending average.**
+    * Also, identify significant decreases if they represent material cost savings or operational changes.
+    * For these accounts (especially those with hikes), quantify the change (percentage and absolute daily average amount).
+    * Explain the potential implications of these changes from a CFO's viewpoint (e.g., escalating costs requiring immediate control, unexpected budget pressures, but also positive cost management trends if decreases are significant).
+    * If a 'Nature' or 'Category' column is available, analyze month-over-month dynamics at this category level. Which categories are driving the most significant increases (especially sudden hikes) or decreases in daily spend?
 
-4.  **Investigation of Spending Anomalies (Day-Wise Data for May, if available):**
-    * For accounts identified with notable increases in daily average spend (from point 3):
-        * If detailed day-wise actual spending data for May is available within the provided dataset (beyond the `Actual Daily average May` summary column), analyze this granular data.
-        * Identify specific dates or periods within May that show unusual spending patterns or appear to be the primary drivers of the increased daily average.
+4.  **Investigation of Spending Anomalies & Hikes (Day-Wise Data for Current Period, if available):**
+    * For accounts identified with notable AOP exceedances (from point 2) or sudden hikes (from point 3):
+        * If detailed day-wise actual spending data for the current period (e.g., May) is available within the provided dataset (beyond the `Actual Daily average May` summary column), analyze this granular data.
+        * Identify specific dates or periods within the current month that show unusual spending patterns or appear to be the primary drivers of the AOP overage or the increased daily average.
         * Based on these daily trends (if data is available), suggest potential underlying reasons for the increased spending or specific areas that warrant immediate further investigation by the business.
 
 **General Instruction for Category Analysis:**
-* If a column representing 'Nature', 'Category', or similar (like the provided `P&L` or `Owner` column) is available in the dataset, actively utilize it to provide aggregated insights at this category level throughout your analysis. Highlight any categories that are major drivers of spending, AOP variance, or month-over-month changes.
+* If a column representing 'Nature', 'Category', or similar (like the provided `P&L` or `Owner` column) is available in the dataset, actively utilize it to provide aggregated insights at this category level throughout your analysis. Highlight any categories that are major drivers of spending, AOP variance (especially overages), or month-over-month changes (especially hikes).
 
 **Guiding Principles for CFO-Level Insights:**
-* **Materiality:** Focus on the most financially significant movements and variances.
-* **Risk Identification:** Clearly flag areas of unexpected cost escalation, significant AOP deviations, or negative trends that could impact financial targets.
-* **Opportunity Identification:** Highlight areas of effective cost management, positive AOP variances, or favorable trends.
-* **Actionability:** Frame insights in a way that suggests potential actions or areas requiring deeper scrutiny.
-* **Conciseness & Clarity:** Use clear business language.
+* **Materiality & Significance:** Focus on the most financially significant movements, variances, and anomalies that would warrant a CFO's attention. Not all deviations are equally important.
+* **Risk Identification:** Clearly flag areas of unexpected cost escalation, significant AOP deviations (especially overages), sudden hikes, and negative trends that could impact financial targets or indicate control weaknesses.
+* **Opportunity Identification:** While focusing on risks, also highlight areas of effective cost management or significant positive AOP variances if they are material.
+* **Actionability & Root Cause Thinking:** Frame insights in a way that suggests potential actions or areas requiring deeper scrutiny. Where possible, hypothesize potential root causes for anomalies.
+* **Conciseness & Clarity:** Use clear, direct business language. Avoid jargon where possible. Summarize key takeaways effectively.
 
 **Output Format:**
 Please present the findings in a structured manner, using tables for summaries and narrative explanations for insights and implications:
 
-* **Overall Spending Trend (May vs. Last Month MTD - Daily Averages):**
-    * Total Overall Actual Daily Spend for May: [`Calculated Sum`]
+* **Overall Spending Trend (Current Period vs. Last Month MTD - Daily Averages):**
+    * Total Overall Actual Daily Spend for Current Period (e.g., May): [`Calculated Sum`]
     * Total Overall Actual Daily Spend for Last Month MTD: [`Calculated Sum`]
-    * Difference (May - Last Month MTD): [`Calculated Difference`]
-    * Commentary on the overall trend.
+    * Difference (Current Period - Last Month MTD): [`Calculated Difference $ and %`]
+    * Commentary on the overall trend and its significance.
 
-* **Top Spending Accounts (May - Based on Daily Average):**
-    * List of top accounts and their `Actual Daily average May`.
+* **Key Spending Drivers & Material Anomalies (Current Period - Based on Daily Average):**
+    * List of key accounts/categories and their `Actual Daily average May`, with notes on why they are highlighted (e.g., top volume, anomalous behavior, significant contribution to total).
     * Brief commentary on spending concentration and category concentration (if applicable).
 
-* **Performance vs. AOP (May - Based on Daily Averages) (Table & Insights):**
-    | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May | AOP Daily Avg May | Daily Variance ($) | Daily Variance (%) | Key Observation/Implication |
-    |---------------------|----------------------------|----------------------|-------------------|--------------------|--------------------|-----------------------------|
-    | ...                 | ...                        | ...                  | ...               | ...                | ...                | ...                         |
-    * Narrative highlighting the most significant over-performing and under-performing accounts and categories (if applicable) against AOP daily averages and why they matter.
+* **Performance vs. AOP (Focus on Significant Overages - Current Period Daily Averages) (Table & Insights):**
+    | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May | AOP Daily Avg May | Daily Variance ($) | Daily Variance (%) | Key Observation/Implication (Focus on Material Overages) |
+    |---------------------|----------------------------|----------------------|-------------------|--------------------|--------------------|-------------------------------------------------------|
+    | ...                 | ...                        | ...                  | ...               | ...                | ...                | ...                                                   |
+    * Narrative highlighting the accounts and categories (if applicable) with the most *material overages* against AOP daily averages. Explain the financial impact and potential risks.
 
-* **Month-over-Month Spending Dynamics (Notable Changes in Daily Averages) (Table & Insights):**
-    | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May | Actual Daily Avg Last Month MTD | Change in Daily Avg ($) | Change in Daily Avg (%) | Potential Implication/Concern |
-    |---------------------|----------------------------|----------------------|---------------------------------|-------------------------|-------------------------|-------------------------------|
-    | ...                 | ...                        | ...                  | ...                             | ...                     | ...                     | ...                           |
-    * Narrative focusing on accounts and categories (if applicable) with the most substantial increases/decreases in daily average spend and the strategic importance of these shifts.
+* **Month-over-Month Spending Dynamics (Focus on Sudden Hikes & Material Changes - Daily Averages) (Table & Insights):**
+    | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May | Actual Daily Avg Last Month MTD | Change in Daily Avg ($) | Change in Daily Avg (%) | Potential Implication/Concern (Focus on Hikes) |
+    |---------------------|----------------------------|----------------------|---------------------------------|-------------------------|-------------------------|------------------------------------------------|
+    | ...                 | ...                        | ...                  | ...                             | ...                     | ...                     | ...                                            |
+    * Narrative focusing on accounts and categories (if applicable) with the most substantial *increases (sudden hikes)* or material decreases in daily average spend. Discuss the strategic importance and potential causes/risks.
 
-* **Deep Dive into Spending Anomalies (for each flagged account, if May daily data is available):**
+* **Deep Dive into Spending Anomalies/Hikes (for each flagged account, if Current Period daily data is available):**
     * **Account:** [`Linked Account Name`]
-    * **Summary of May Daily Spending Trend:** [e.g., Consistent high spend, specific spike on ProjetP&L-MM-DD, increasing trend within the month]
-    * **Key Dates/Periods of Concern in May:** [List dates/periods]
-    * **Potential Reasons/Areas for Investigation:** [e.g., New campaign launch, unexpected vendor charges, increased resource usage, data entry error]
-    * *(If detailed May daily data is not found, please state: "Detailed day-wise data for May not available for a deeper dive for this account based on provided columns.")*
+    * **Summary of Current Period Daily Spending Trend:** [e.g., Consistent high spend, specific spike on YYYY-MM-DD, increasing trend within the month]
+    * **Key Dates/Periods of Concern in Current Period:** [List dates/periods]
+    * **Potential Reasons/Areas for Investigation:** [e.g., New service launch, unexpected vendor charges, increased resource usage, data entry error, seasonal peak]
+    * *(If detailed daily data for the current period is not found, please state: "Detailed day-wise data for the current period not available for a deeper dive for this account based on provided columns.")*
 
 **Important Notes for LLM:**
 * Utilize the provided daily average columns (`Actual Daily average May`, `AOP Daily average May`, `Actual Daily average Last month MTD`) directly for all comparisons and insights. Do not perform MTD total calculations unless a specific MTD total column is explicitly provided in the dataset and its use is requested.
-* When identifying "significant" variances or "notable" changes, use your analytical judgment based on the data patterns to highlight what would be of material interest or concern to financial leadership. Briefly explain the basis for your judgment (e.g., high percentage change relative to base, large absolute deviation, deviation from historical trends if discernible).
+* When identifying "significant" variances or "notable" changes/anomalies, use your analytical judgment based on the data patterns to highlight what would be of material interest or concern to financial leadership. Briefly explain the basis for your judgment (e.g., high percentage change relative to base, large absolute deviation, deviation from historical trends if discernible, impact on overall budget).
 * Projections for the full month or other periods should **only** be provided if explicitly requested by the user in a follow-up query. The primary focus is on analyzing the data as presented.
 * `P&L`, `Owner`, or other similar category/nature columns should be actively used to enrich the analysis by identifying if trends are concentrated within specific segments.
+* **After providing the initial report, be prepared to answer follow-up questions from the user regarding the AWS cost data provided. You can elaborate on points from the report, perform different cuts of the data, or explore other aspects as long as it relates to the content of the uploaded file(s). Be open and flexible in addressing these subsequent queries.**
 """
 
 def get_openai_response(user_query, data_context):

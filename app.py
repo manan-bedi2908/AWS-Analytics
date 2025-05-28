@@ -6,7 +6,6 @@ import smtplib # For sending emails
 from email.mime.text import MIMEText # For creating email messages
 from email.mime.multipart import MIMEMultipart # For creating email messages
 from email.mime.application import MIMEApplication # For PDF attachments
-from openai.types.error import OpenAIError
 from openai.error import OpenAIError
 # For PDF Generation
 import markdown2 # For converting markdown to HTML (pip install markdown2)

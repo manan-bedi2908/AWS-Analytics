@@ -2,275 +2,411 @@ import streamlit as st
 import pandas as pd
 import openai
 import os
-import numpy as np
+import smtplib # For sending emails
+from email.mime.text import MIMEText # For creating email messages
+from email.mime.multipart import MIMEMultipart # For creating email messages
+from email.mime.application import MIMEApplication # For PDF attachments
+# For PDF Generation
+import markdown2 # For converting markdown to HTML (pip install markdown2)
+from xhtml2pdf import pisa # For converting HTML to PDF (pip install xhtml2pdf)
+import io # For handling byte streams
 
-# --- Configuration & Secrets ---
 # Azure OpenAI setup using Streamlit secrets
-openai.api_type = "azure"
-openai.api_key = st.secrets.get("AZURE_OPENAI_API_KEY")
-openai.api_base = st.secrets.get("AZURE_API_BASE")
-openai.api_version = st.secrets.get("AZURE_API_VERSION") # Example: "2023-07-01-preview" or "2024-02-15-preview"
-
-# Ensure secrets are loaded
-if not all([openai.api_key, openai.api_base, openai.api_version]):
-    st.error("❌ Critical Azure OpenAI secrets are missing. Please configure AZURE_OPENAI_API_KEY, AZURE_API_BASE, and AZURE_API_VERSION in your Streamlit secrets.")
+# Ensure these secrets are set in your Streamlit Cloud environment or local secrets.toml
+try:
+    openai.api_type = "azure"
+    openai.api_key = st.secrets["AZURE_OPENAI_API_KEY"]
+    openai.api_base = st.secrets["AZURE_API_BASE"]
+    openai.api_version = st.secrets["AZURE_API_VERSION"]
+    deployment_name = st.secrets["AZURE_DEPLOYMENT_NAME"]  # This is your deployment, not model name
+except KeyError as e:
+    st.error(f"Azure OpenAI secret not found: {e}. Please set it in your Streamlit secrets.")
     st.stop()
-
-chat_deployment_name = st.secrets.get("AZURE_DEPLOYMENT_NAME") # Your chat model deployment (e.g., gpt-4, gpt-35-turbo)
-embedding_deployment_name = st.secrets.get("AZURE_EMBEDDING_DEPLOYMENT") # Your embedding model deployment (e.g., text-embedding-ada-002)
-
-if not chat_deployment_name:
-    st.error("❌ AZURE_CHAT_DEPLOYMENT_NAME is missing from Streamlit secrets.")
-    st.stop()
-if not embedding_deployment_name:
-    st.error("❌ AZURE_EMBEDDING_DEPLOYMENT_NAME is missing from Streamlit secrets.")
+except Exception as e:
+    st.error(f"Error initializing Azure OpenAI: {e}")
     st.stop()
 
 
-# --- Helper Functions ---
-def get_embedding(text, engine):
-    """Generates an embedding for the given text using Azure OpenAI."""
-    try:
-        response = openai.Embedding.create(engine=engine, input=text)
-        return response['data'][0]['embedding']
-    except Exception as e:
-        st.error(f"❌ Error generating embedding: {e}")
-        return None
+# Streamlit app config
+st.set_page_config(page_title="📊 AWS Cost Analyzer", layout="wide") 
+st.title("📊 AWS Cost Analyzer with Azure OpenAI")
+st.markdown("Upload your AWS Cost file, and the system will automatically generate initial insights. You can then ask follow-up questions.")
 
-def cosine_similarity(vec1, vec2):
-    """Computes cosine similarity between two vectors."""
-    vec1 = np.array(vec1)
-    vec2 = np.array(vec2)
-    return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-
-def chunk_dataframe(df, sheet_name, chunk_size=5):
-    """Splits a DataFrame into textual chunks."""
-    chunks = []
-    df_string = df.to_string(index=False) # Full dataframe string for context if needed later
-    
-    # Add column headers to each chunk for context
-    header = ", ".join(df.columns.tolist())
-    
-    for i in range(0, len(df), chunk_size):
-        chunk_df = df[i:i + chunk_size]
-        # More descriptive chunk text
-        chunk_text = f"Sheet: {sheet_name}\nColumns: {header}\nRows {i+1} to {i+len(chunk_df)}:\n"
-        chunk_text += chunk_df.to_string(index=False, header=False) # Don't repeat header in each row part
-        chunks.append({"text": chunk_text, "sheet": sheet_name, "rows": f"{i+1}-{i+len(chunk_df)}"})
-    return chunks
-
-# --- Streamlit App ---
-st.set_page_config(page_title="📊 P&L Analyzer", layout="wide") # Changed to wide for better display
-st.title("📊 P&L Analyzer with Azure OpenAI & Embeddings")
-
-# Initialize session state
+# Initialize session state variables
 if 'conversation_history' not in st.session_state:
     st.session_state.conversation_history = []
-if 'file_data' not in st.session_state: # Stores raw DataFrames by sheet name
+if 'file_data' not in st.session_state:
     st.session_state.file_data = {}
-if 'chunks_with_embeddings' not in st.session_state: # Stores text chunks and their embeddings
-    st.session_state.chunks_with_embeddings = []
-if 'current_file_name' not in st.session_state:
-    st.session_state.current_file_name = None
+if 'initial_report_generated' not in st.session_state:
+    st.session_state.initial_report_generated = False
+if 'initial_report_content' not in st.session_state:
+    st.session_state.initial_report_content = ""
+if 'selected_sheets_for_report' not in st.session_state:
+    st.session_state.selected_sheets_for_report = []
+if 'uploaded_file_name_for_subject' not in st.session_state: # To store filename for email subject
+    st.session_state.uploaded_file_name_for_subject = "AWS Cost Analysis"
 
 
-# --- File Upload and Processing ---
-uploaded_file = st.file_uploader("Upload your P&L file (.csv or .xlsx)", type=["csv", "xlsx"])
+# System prompt (as defined in the Canvas)
+SYS_PROMPT = """
+**Objective:**
+Analyze the provided AWS Cost dataset (e.g., from Book1.xlsx - Sheet1.csv) to extract critical financial signals and insights for May. Focus on account spending dynamics, adherence to AOP, and significant cost variations by directly utilizing the provided daily average metrics. The insights should be actionable and relevant for financial leadership (CFO perspective).
+
+**Key Columns to Use from Your Dataset:**
+* **Account Identifier:** `Linked Account Name` (primary for reporting), `Linked Account ID`, `Account Number`
+* **Contextual/Segmentation (Optional):** `P&L`, `Owner`, or any column representing 'Nature' or 'Category'.
+* **AOP/Budget Data for May:** `AOP Daily average May`
+* **Actual Spending Data for May:** `Actual Daily average May`
+* **Previous Period Benchmark:** `Actual Daily average Last month MTD`
+* **(Note on other columns):** The dataset also contains `AOP Daily average May Best` and `Actual Daily average Last full month day wise data...`. These can be used for supplementary context if relevant, or if specific follow-up questions address them.
+
+**Key Areas of Inquiry & Insights (Focusing on May data, using provided daily averages):**
+
+0.  **Overall Spending Trend (Absolute Daily Averages):**
+    * Calculate the sum of the column `Actual Daily average May` across all accounts to get the "Total Overall Actual Daily Spend for May." NOT AOP. You'll be penalized for using that
+    * Calculate the sum of `Actual Daily average Last month MTD` across all accounts to get the "Total Overall Actual Daily Spend for Last Month MTD."
+    * Report these two absolute numbers and the difference between them.
+    * Comment on the overall month-over-month trend in daily spending for the entire portfolio.
+
+1.  **Top Spending Accounts (Based on May Daily Average):**
+    * Using `Linked Account Name`, identify accounts with the highest `Actual Daily average May`.
+    * Comment on the concentration of spend if any particular accounts dominate.
+    * If a 'Nature' or 'Category' column (e.g., `P&L`) is available, identify if top spending accounts are concentrated in specific categories/natures.
+
+2.  **Performance vs. AOP (Based on May Daily Averages):**
+    * For each `Linked Account Name`, compare its `Actual Daily average May` directly with its `AOP Daily average May`.
+    * Calculate the variance (Actual Daily Avg - AOP Daily Avg) in both absolute daily amount and percentage.
+    * Highlight accounts with significant positive variances (daily average spend considerably below AOP daily average) and significant negative variances (daily average spend considerably above AOP daily average).
+    * Explain what makes these variances "significant" from a CFO's perspective (e.g., large percentage deviation impacting budget adherence, high absolute daily overspend, consistent trend across multiple high-value accounts).
+    * If a 'Nature' or 'Category' column is available, summarize AOP performance at this category level. Which categories are most over/under budget based on daily averages?
+
+3.  **Month-over-Month Spending Dynamics (Comparison of Daily Averages):**
+    * For each `Linked Account Name`, compare its `Actual Daily average May` with its `Actual Daily average Last month MTD`.
+    * Pinpoint accounts exhibiting notable increases ("sudden hikes") or decreases in their daily spending average.
+    * For these accounts, quantify the change (percentage and absolute daily average amount).
+    * Explain the potential implications of these changes (e.g., escalating costs needing control, positive cost management trends, potential shifts in operational activity).
+    * If a 'Nature' or 'Category' column is available, analyze month-over-month dynamics at this category level. Which categories are driving the most significant increases or decreases in daily spend?
+
+4.  **Investigation of Spending Anomalies (Day-Wise Data for May, if available):**
+    * For accounts identified with notable increases in daily average spend (from point 3):
+        * If detailed day-wise actual spending data for May is available within the provided dataset (beyond the `Actual Daily average May` summary column), analyze this granular data.
+        * Identify specific dates or periods within May that show unusual spending patterns or appear to be the primary drivers of the increased daily average.
+        * Based on these daily trends (if data is available), suggest potential underlying reasons for the increased spending or specific areas that warrant immediate further investigation by the business.
+
+**General Instruction for Category Analysis:**
+* If a column representing 'Nature', 'Category', or similar (like the provided `P&L` or `Owner` column) is available in the dataset, actively utilize it to provide aggregated insights at this category level throughout your analysis. Highlight any categories that are major drivers of spending, AOP variance, or month-over-month changes.
+
+**Guiding Principles for CFO-Level Insights:**
+* **Materiality:** Focus on the most financially significant movements and variances.
+* **Risk Identification:** Clearly flag areas of unexpected cost escalation, significant AOP deviations, or negative trends that could impact financial targets.
+* **Opportunity Identification:** Highlight areas of effective cost management, positive AOP variances, or favorable trends.
+* **Actionability:** Frame insights in a way that suggests potential actions or areas requiring deeper scrutiny.
+* **Conciseness & Clarity:** Use clear business language.
+
+**Output Format:**
+Please present the findings in a structured manner, using tables for summaries and narrative explanations for insights and implications:
+
+* **Overall Spending Trend (May vs. Last Month MTD - Daily Averages):**
+    * Total Overall Actual Daily Spend for May: [`Calculated Sum`]
+    * Total Overall Actual Daily Spend for Last Month MTD: [`Calculated Sum`]
+    * Difference (May - Last Month MTD): [`Calculated Difference`]
+    * Commentary on the overall trend.
+
+* **Top Spending Accounts (May - Based on Daily Average):**
+    * List of top accounts and their `Actual Daily average May`.
+    * Brief commentary on spending concentration and category concentration (if applicable).
+
+* **Performance vs. AOP (May - Based on Daily Averages) (Table & Insights):**
+    | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May | AOP Daily Avg May | Daily Variance ($) | Daily Variance (%) | Key Observation/Implication |
+    |---------------------|----------------------------|----------------------|-------------------|--------------------|--------------------|-----------------------------|
+    | ...                 | ...                        | ...                  | ...               | ...                | ...                | ...                         |
+    * Narrative highlighting the most significant over-performing and under-performing accounts and categories (if applicable) against AOP daily averages and why they matter.
+
+* **Month-over-Month Spending Dynamics (Notable Changes in Daily Averages) (Table & Insights):**
+    | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May | Actual Daily Avg Last Month MTD | Change in Daily Avg ($) | Change in Daily Avg (%) | Potential Implication/Concern |
+    |---------------------|----------------------------|----------------------|---------------------------------|-------------------------|-------------------------|-------------------------------|
+    | ...                 | ...                        | ...                  | ...                             | ...                     | ...                     | ...                           |
+    * Narrative focusing on accounts and categories (if applicable) with the most substantial increases/decreases in daily average spend and the strategic importance of these shifts.
+
+* **Deep Dive into Spending Anomalies (for each flagged account, if May daily data is available):**
+    * **Account:** [`Linked Account Name`]
+    * **Summary of May Daily Spending Trend:** [e.g., Consistent high spend, specific spike on ProjetP&L-MM-DD, increasing trend within the month]
+    * **Key Dates/Periods of Concern in May:** [List dates/periods]
+    * **Potential Reasons/Areas for Investigation:** [e.g., New campaign launch, unexpected vendor charges, increased resource usage, data entry error]
+    * *(If detailed May daily data is not found, please state: "Detailed day-wise data for May not available for a deeper dive for this account based on provided columns.")*
+
+**Important Notes for LLM:**
+* Utilize the provided daily average columns (`Actual Daily average May`, `AOP Daily average May`, `Actual Daily average Last month MTD`) directly for all comparisons and insights. Do not perform MTD total calculations unless a specific MTD total column is explicitly provided in the dataset and its use is requested.
+* When identifying "significant" variances or "notable" changes, use your analytical judgment based on the data patterns to highlight what would be of material interest or concern to financial leadership. Briefly explain the basis for your judgment (e.g., high percentage change relative to base, large absolute deviation, deviation from historical trends if discernible).
+* Projections for the full month or other periods should **only** be provided if explicitly requested by the user in a follow-up query. The primary focus is on analyzing the data as presented.
+* `P&L`, `Owner`, or other similar category/nature columns should be actively used to enrich the analysis by identifying if trends are concentrated within specific segments.
+"""
+
+def get_openai_response(user_query, data_context):
+    """Generates a response from Azure OpenAI based on the user query and data context."""
+    messages = [{"role": "system", "content": SYS_PROMPT}]
+    messages.append({"role": "user", "content": f"Here is the AWS Cost data I am referring to:\n{data_context}\n\nMy question: {user_query}"})
+    
+    try:
+        response = openai.ChatCompletion.create(
+            engine=deployment_name,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=4000 
+        )
+        return response["choices"][0]["message"]["content"]
+    except openai.error.InvalidRequestError as e: 
+        if "maximum context length" in str(e):
+            st.error(f"❌ Error: The request was too long and exceeded the model's token limit. Please try with fewer selected sheets, a shorter question, or contact support. Details: {e}")
+        else:
+            st.error(f"❌ Error communicating with Azure OpenAI (Invalid Request): {e}")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error communicating with Azure OpenAI: {e}")
+        return None
+
+def create_pdf_from_markdown_v2(markdown_content, filename="report.pdf"):
+    """Creates a PDF file from markdown content using xhtml2pdf for better table support."""
+    try:
+        html_content = markdown2.markdown(markdown_content, extras=["tables", "fenced-code-blocks", "code-friendly"])
+        
+        html_with_style = f"""
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: Arial, sans-serif; font-size: 10pt; line-height: 1.6; }}
+                table {{ border-collapse: collapse; width: 100%; margin-bottom: 1em; }}
+                th, td {{ border: 1px solid #dddddd; text-align: left; padding: 8px; }}
+                th {{ background-color: #f2f2f2; font-weight: bold; }}
+                pre {{ background-color: #f5f5f5; border: 1px solid #ccc; padding: 10px; white-space: pre-wrap; word-wrap: break-word; }}
+                code {{ font-family: monospace; }}
+                h1 {{ font-size: 18pt; }}
+                h2 {{ font-size: 16pt; }}
+                h3 {{ font-size: 14pt; }}
+            </style>
+        </head>
+        <body>
+            {html_content}
+        </body>
+        </html>
+        """
+
+        pdf_file = io.BytesIO()
+        pisa_status = pisa.CreatePDF(
+            io.StringIO(html_with_style), 
+            dest=pdf_file                  
+        )
+
+        if pisa_status.err:
+            st.error(f"Error during PDF creation (pisa): {pisa_status.err}")
+            return None
+        
+        pdf_file.seek(0)
+        return pdf_file.getvalue()
+
+    except Exception as e:
+        st.error(f"Error generating PDF with xhtml2pdf: {e}")
+        return None
+
+
+def send_email_with_pdf_attachment(subject, body_text, to_recipient, cc_recipient, pdf_bytes, pdf_filename="report.pdf"):
+    """Sends an email with a PDF attachment using Gmail SMTP."""
+    try:
+        sender_email = st.secrets["GMAIL_SENDER_EMAIL"]
+        sender_password = st.secrets["GMAIL_SENDER_APP_PASSWORD"]
+    except KeyError as e:
+        st.error(f"Email secret not found: {e}. Please set GMAIL_SENDER_EMAIL and GMAIL_SENDER_APP_PASSWORD in Streamlit secrets.")
+        return False
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = to_recipient
+    if cc_recipient:
+        msg['Cc'] = cc_recipient
+    msg['Subject'] = subject
+    
+    msg.attach(MIMEText(body_text, 'plain'))
+    
+    if pdf_bytes:
+        part = MIMEApplication(pdf_bytes, Name=pdf_filename)
+        part['Content-Disposition'] = f'attachment; filename="{pdf_filename}"'
+        msg.attach(part)
+    else:
+        st.warning("No PDF content to attach. Email will be sent without PDF.")
+
+    try:
+        recipients_list = [to_recipient]
+        if cc_recipient:
+            recipients_list.append(cc_recipient)
+        
+        display_recipients = ", ".join(filter(None, [to_recipient, cc_recipient]))
+
+
+        with st.spinner(f"📧 Sending email with PDF to {display_recipients}..."):
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(sender_email, sender_password)
+                server.send_message(msg) # send_message handles To and Cc correctly
+        st.success(f"📧 Email with PDF sent successfully to {display_recipients}!")
+        return True
+    except Exception as e:
+        st.error(f"❌ Failed to send email with PDF: {e}")
+        return False
+
+# --- UI Layout ---
+# Section 1: File Upload & Sheet Selection
+st.subheader("📁 File Upload & Sheet Selection")
+uploaded_file = st.file_uploader("Upload your AWS Cost file (.csv or .xlsx)", type=["csv", "xlsx"])
 
 if uploaded_file:
-    # If a new file is uploaded, clear previous chunked data and conversation
-    if st.session_state.current_file_name != uploaded_file.name:
-        st.session_state.file_data = {}
-        st.session_state.chunks_with_embeddings = []
-        st.session_state.conversation_history = [] # Optionally reset history for new file
-        st.session_state.current_file_name = uploaded_file.name
-        st.info("New file detected. Previous analysis context cleared.")
+    if st.session_state.get('uploaded_file_name_for_subject') != uploaded_file.name:
+        st.session_state.file_data = {} 
+        st.session_state.initial_report_generated = False
+        st.session_state.initial_report_content = ""
+        st.session_state.conversation_history = [] 
+        st.session_state.selected_sheets_for_report = []
+        st.session_state.uploaded_file_name_for_subject = uploaded_file.name 
+        st.info("New file detected. Session has been reset for new analysis.")
 
-    if not st.session_state.file_data: # Only process if not already processed for this file
+    if not st.session_state.file_data or st.session_state.uploaded_file_name_for_subject == uploaded_file.name:
         try:
-            uploaded_file.seek(0) # Reset file pointer
+            uploaded_file.seek(0) 
             filename = uploaded_file.name.lower()
-            
-            temp_file_data = {}
+            current_file_data_temp = {} 
+
             if filename.endswith(".csv"):
                 df = pd.read_csv(uploaded_file)
-                temp_file_data = {"Sheet1": df}
+                current_file_data_temp = {"Sheet1": df}
             elif filename.endswith(".xlsx"):
                 xls = pd.ExcelFile(uploaded_file, engine="openpyxl")
-                temp_file_data = {
+                current_file_data_temp = {
                     sheet_name: xls.parse(sheet_name)
                     for sheet_name in xls.sheet_names
                 }
-            else:
+            else: 
                 raise ValueError("Unsupported file format.")
             
-            st.session_state.file_data = temp_file_data
+            st.session_state.file_data = current_file_data_temp 
             st.success(f"✅ File '{uploaded_file.name}' loaded with {len(st.session_state.file_data)} sheet(s).")
 
         except Exception as e:
             st.error(f"❌ Error reading file: {e}")
-            st.session_state.file_data = {} # Clear on error
+            st.session_state.file_data = {} 
+            st.session_state.initial_report_generated = False
 
-# --- Sheet Selector and Embedding Generation ---
-if st.session_state.file_data and not st.session_state.chunks_with_embeddings: # Only process if file loaded and chunks not yet created
+if st.session_state.file_data:
     sheet_names = list(st.session_state.file_data.keys())
-    st.markdown("---")
-    st.subheader("STEP 1: Select Sheets and Generate Embeddings")
     
-    # Use a form for sheet selection and processing to avoid re-runs on widget interaction
-    with st.form(key='sheet_selection_form'):
-        selected_sheets_for_embedding = st.multiselect(
-            "📌 Select sheet(s) to process for analysis:",
-            options=sheet_names,
-            default=sheet_names if sheet_names else [] # Default to all sheets
-        )
-        chunk_size_option = st.slider("Rows per chunk for embeddings:", min_value=1, max_value=50, value=10, step=1)
-        process_button = st.form_submit_button(label='⚙️ Process Selected Sheets')
+    if 'selected_sheets_multiselect' not in st.session_state:
+        st.session_state.selected_sheets_multiselect = [sheet_names[0]] if sheet_names else []
 
-    if process_button and selected_sheets_for_embedding:
-        with st.spinner(f"Processing {len(selected_sheets_for_embedding)} sheet(s) and generating embeddings... This may take a while."):
-            all_chunks_with_embeddings = []
-            for sheet_name in selected_sheets_for_embedding:
-                if sheet_name in st.session_state.file_data:
-                    df = st.session_state.file_data[sheet_name]
-                    if df.empty:
-                        st.warning(f"Sheet '{sheet_name}' is empty. Skipping.")
-                        continue
-                    
-                    st.markdown(f"#### 📄 Preview: `{sheet_name}` (First 5 rows)")
-                    st.dataframe(df.head(5))
+    selected_sheets = st.multiselect(
+        "📌 Select sheet(s) to analyze",
+        options=sheet_names,
+        default=st.session_state.selected_sheets_multiselect, 
+    )
+    st.session_state.selected_sheets_multiselect = selected_sheets 
 
-                    text_chunks = chunk_dataframe(df, sheet_name, chunk_size=chunk_size_option)
+    if selected_sheets:
+        if selected_sheets != st.session_state.selected_sheets_for_report:
+            st.session_state.selected_sheets_for_report = selected_sheets
+            st.session_state.initial_report_generated = False 
+            st.session_state.initial_report_content = ""
+            st.session_state.conversation_history = [] 
+            st.info("Sheet selection changed. Initial report will regenerate. Conversation history reset.")
+
+        for sheet in selected_sheets:
+            with st.expander(f"📄 Preview: `{sheet}` (Top 10 rows)"):
+                st.dataframe(st.session_state.file_data[sheet].head(10))
+        
+        if not st.session_state.initial_report_generated and st.session_state.selected_sheets_for_report:
+            with st.spinner("🤖 Generating initial insights report... This may take a moment."):
+                combined_text_for_initial_report = ""
+                for sheet_name in st.session_state.selected_sheets_for_report:
+                    if sheet_name in st.session_state.file_data:
+                        df = st.session_state.file_data[sheet_name].head(1000)  
+                        df_text = df.to_string(index=False)
+                        combined_text_for_initial_report += f"\n--- Data from Sheet: {sheet_name} ---\n{df_text}\n--- End of Sheet: {sheet_name} ---\n"
+                    else:
+                        st.warning(f"Sheet '{sheet_name}' not found in loaded data. Skipping for initial report.")
+                
+                if combined_text_for_initial_report: 
+                    initial_query = "Generate insights from the data based on the system prompt provided."
+                    report_content = get_openai_response(initial_query, combined_text_for_initial_report)
                     
-                    for i, chunk_info in enumerate(text_chunks):
-                        st.write(f"Generating embedding for chunk {i+1}/{len(text_chunks)} from sheet '{sheet_name}'...")
-                        embedding = get_embedding(chunk_info["text"], engine=embedding_deployment_name)
-                        if embedding:
-                            all_chunks_with_embeddings.append({
-                                "text": chunk_info["text"],
-                                "embedding": embedding,
-                                "sheet": chunk_info["sheet"],
-                                "rows": chunk_info["rows"]
-                            })
-            st.session_state.chunks_with_embeddings = all_chunks_with_embeddings
-            if st.session_state.chunks_with_embeddings:
-                st.success(f"✅ Successfully processed and embedded {len(st.session_state.chunks_with_embeddings)} chunks from selected sheets!")
+                    if report_content:
+                        st.session_state.initial_report_content = report_content
+                        st.session_state.initial_report_generated = True
+                        st.session_state.conversation_history.append({"role": "user", "content": initial_query + " (Automatic Initial Report)"})
+                        st.session_state.conversation_history.append({"role": "assistant", "content": report_content})
+                    else:
+                        st.warning("Could not generate initial report. OpenAI call might have failed. Please try asking a question manually.")
+                else:
+                    st.warning("No data from selected sheets to generate initial report.")
+st.divider() # Divider after the upload/selection section
+
+# Section 2: AI Insights & Chat
+st.subheader("💬 AI Insights & Chat")
+
+if st.session_state.initial_report_generated and st.session_state.initial_report_content:
+    st.markdown("### 🚀 Initial Insights Report")
+    with st.container(height=400, border=True): 
+        st.markdown(st.session_state.initial_report_content)
+    
+    # Modified button text
+    if st.button("📧 Email Initial Report (PDF) to Finance Team"):
+        if st.session_state.initial_report_content:
+            pdf_bytes = create_pdf_from_markdown_v2(st.session_state.initial_report_content) 
+            if pdf_bytes:
+                email_subject = f"AWS Analyzer Insights (PDF): {st.session_state.uploaded_file_name_for_subject}"
+                email_body = "Please find the AWS analysis report attached as a PDF."
+                # Sending to specific To and Cc recipients
+                to_email = "manan.bedi@paytm.com"
+                cc_email = "deepika.rawal@paytm.com"
+                send_email_with_pdf_attachment(email_subject, email_body, to_email, cc_email, pdf_bytes, f"{st.session_state.uploaded_file_name_for_subject}_Report.pdf")
             else:
-                st.warning("⚠️ No data chunks were processed or embedded. Ensure sheets have data and are selected.")
-    elif process_button and not selected_sheets_for_embedding:
-        st.warning("⚠️ Please select at least one sheet to process.")
+                st.error("Failed to generate PDF for email.")
+        else:
+            st.warning("No report content available to email.")
+    st.divider()
+
+if st.session_state.conversation_history:
+    with st.expander("📜 View Conversation History", expanded=False):
+        history_container_key = f"history_container_{len(st.session_state.conversation_history)}"
+        with st.container(height=300, border=True): 
+            for i, msg in enumerate(st.session_state.conversation_history):
+                role_emoji = "👤" if msg["role"] == "user" else "🤖"
+                with st.chat_message(msg["role"], avatar=role_emoji):
+                    st.markdown(msg["content"])
+    st.divider()
 
 
-# --- System Prompt and Chat Logic ---
-SYS_PROMPT = "" \
-"DO THE DATA PROCESSING AND ANALYSIS YOURSELF LIKE CLEANING DATA, PROCESSING IN RIGHT FORMAT, etc. " \
-"MTD (Month till date) Cost refers to cost till date. It is NOT just 1 day. So don't do a mistake of extracting only the first column. " \
-"Calculate MTD like this summating the cost of all days until now. For example till wherever the current month data is available that is MTD."\
-"You are provided the AWS Cost Dataset. It has daily level cost account wise. It contains MTD i.e daily costs for the current month," \
-"corresponding costs for the same data for previous month. And previous month day level costs are also having columns for each day. Don't consider just the first column. " \
-"You should also be able to compute the projections on the basis of current MTD costs. " \
-"MTD (Month till date) Cost refers to cost till date. It is NOT just 1 day. So don't do a mistake of extracting only the first column. " \
-"If the user specifically asks for any particular day then mention insights only for that day." \
-"Apply the projection formula carefully. Whole month projection cannot be less than the projected cost" \
-"Carefully analyze each column and its details. " \
-"Don't get confused by the date column names. It is just the day wise cost. All the costs are in USD." \
-"Also gather insights like which AWS Accounts are having highest spends on, least spends on, sudden high spikes basis previous day and the percentages." \
-"Don't just say that you can do the analysis of this and that. Povide actual insights and analysis of the data." \
-"And if you are mentioning HODs name that he had the highest cost, instead prioritize individual AWS Accounts like which all are must to observe on. (You can mention though that this account comes under the HOD, category, etc.)" \
-"For example if you are analyzing May, then each day of may wil have separate column. And far from it will be each day columns for Apr. Be intelligent enough to locate." \
-"Most important: Don't read the data beyond row 190." \
-"Output should be strictly in tabular format with columns: 1. AWS Account Name 2. MTD Cost of the particular month 3. Cost for the same number of days in previous month" \
-"4. Projection for current month 5. Growth/decline percentage from the previous month 6. Reason for the insight if any"
-
-if st.session_state.chunks_with_embeddings:
-    st.markdown("---")
-    st.subheader("STEP 2: Ask Questions About Your Data")
-
-    # Display chat history
-    for message in st.session_state.conversation_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            
-    user_question = st.chat_input("Ask a question about your P&L data...")
+if st.session_state.file_data and st.session_state.selected_sheets_for_report:
+    user_question = st.chat_input("Ask a follow-up question about your AWS data...")
 
     if user_question:
-        st.session_state.conversation_history.append({"role": "user", "content": user_question})
-        with st.chat_message("user"):
-            st.markdown(user_question)
-
-        with st.spinner("🔍 Thinking and retrieving relevant data..."):
-            try:
-                question_embedding = get_embedding(user_question, engine=embedding_deployment_name)
-                if not question_embedding:
-                    st.error("❌ Could not generate embedding for the question. Please try again.")
-                    st.stop()
-
-                # Find relevant chunks
-                relevant_chunks = []
-                for chunk_data in st.session_state.chunks_with_embeddings:
-                    similarity = cosine_similarity(question_embedding, chunk_data["embedding"])
-                    relevant_chunks.append({"data": chunk_data, "similarity": similarity})
-                
-                # Sort by similarity and get top N (e.g., top 5)
-                relevant_chunks.sort(key=lambda x: x["similarity"], reverse=True)
-                top_n = 20
-                context_chunks = relevant_chunks[:top_n]
-
-                if not context_chunks or context_chunks[0]['similarity'] < 0.7: # Threshold for relevance
-                     st.warning("⚠️ Could not find highly relevant data chunks for your question. The answer might be very general or indicate that the information is not available in the processed data.")
-                
-                context_text = "\n\n---\n\n".join([
-                    f"Relevant Chunk from Sheet: {chunk['data']['sheet']}, Rows: {chunk['data']['rows']}\nSimilarity Score: {chunk['similarity']:.4f}\nContent:\n{chunk['data']['text']}" 
-                    for chunk in context_chunks
-                ])
-                
-                # Debug: Show context being sent
-                # with st.expander("Context sent to AI (Top relevant chunks)"):
-                # st.text(context_text)
-
-                messages = [
-                    {"role": "system", "content": SYS_PROMPT},
-                    {"role": "user", "content": f"Here is the relevant data chunks based on my question:\n{context_text}\n\nMy question is: {user_question}"}
-                ]
-                
-                # Add previous conversation for context (optional, can hit token limits quickly)
-                # for msg in st.session_state.conversation_history[-3:]: # last 3 exchanges
-                #     if msg["role"] == "user":
-                #         messages.insert(-1, {"role": "user", "content": msg["content"]})
-                #     elif msg["role"] == "assistant":
-                #         messages.insert(-1, {"role": "assistant", "content": msg["content"]})
-
-
-                response = openai.ChatCompletion.create(
-                    engine=chat_deployment_name,
-                    messages=messages,
-                    temperature=0.2, # Lower temperature for more factual financial analysis
-                    max_tokens=1500 # Adjust as needed
-                )
-                reply = response["choices"][0]["message"]["content"]
-
-                st.session_state.conversation_history.append({"role": "assistant", "content": reply})
-                with st.chat_message("assistant"):
-                    st.markdown(reply)
-
-            except openai.error.InvalidRequestError as e:
-                st.error(f"❌ OpenAI API Error (Invalid Request): {e}. This might be due to exceeding token limits even with chunking if the question or retrieved context is too large. Try a shorter question or processing with smaller chunk sizes.")
-            except Exception as e:
-                st.error(f"❌ Error generating response: {e}")
-else:
-    if st.session_state.file_data:
-         st.info("☝️ Please select sheets and click 'Process Selected Sheets' to enable chat.")
-    else:
-        st.info("👋 Welcome! Please upload your P&L file to begin analysis.")
-
-
-# Optional: show all processed chunks (for debugging or transparency)
-if st.session_state.chunks_with_embeddings:
-    with st.expander("🔬 View All Processed Data Chunks and Embeddings (for debugging)"):
-        st.write(f"Total chunks processed: {len(st.session_state.chunks_with_embeddings)}")
-        for i, chunk_data in enumerate(st.session_state.chunks_with_embeddings):
-            st.markdown(f"**Chunk {i+1} (Sheet: {chunk_data['sheet']}, Rows: {chunk_data['rows']})**")
-            st.text(chunk_data["text"][:300] + "...") # Preview of chunk text
-            # st.write(f"Embedding vector (first 10 dims): {chunk_data['embedding'][:10]}") # Don't display full embedding
-            st.markdown("---")
+        combined_text_for_chat = ""
+        for sheet_name in st.session_state.selected_sheets_for_report:
+             if sheet_name in st.session_state.file_data:
+                df = st.session_state.file_data[sheet_name].head(1000)  
+                df_text = df.to_string(index=False)
+                combined_text_for_chat += f"\n--- Data from Sheet: {sheet_name} ---\n{df_text}\n--- End of Sheet: {sheet_name} ---\n"
+        
+        if not combined_text_for_chat:
+            st.warning("No data from selected sheets to provide context for the question. Please select valid sheets.")
+        else:
+            st.session_state.conversation_history.append({"role": "user", "content": user_question})
+            with st.spinner("🤔 Thinking..."):
+                reply = get_openai_response(user_question, combined_text_for_chat)
+                if reply:
+                    st.session_state.conversation_history.append({"role": "assistant", "content": reply})
+                else:
+                    if st.session_state.conversation_history and st.session_state.conversation_history[-1]["role"] == "user":
+                        st.session_state.conversation_history.pop()
+                        st.warning("Failed to get a response from the AI. Your question was not processed.")
+            st.rerun() 
+elif not st.session_state.file_data:
+    st.info("☝️ Please upload a AWS Cost file to begin analysis.")
+else: 
+    st.warning("Please select at least one sheet to enable chat and initial report generation.")
 

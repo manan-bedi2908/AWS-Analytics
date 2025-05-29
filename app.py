@@ -65,27 +65,27 @@ Analyze the provided AWS Cost dataset to extract critical financial signals and 
 **Key Areas of Inquiry & Insights (Focusing on Current Period data, using provided daily averages):**
 
 0.  **Overall Spending Trend (Absolute Daily Averages):**
-    * Calculate the sum of `Actual Daily average May` across all accounts to get the "Overall Average Actual Daily Spend for May MTD."
+    * Calculate the sum of `Actual Daily average May` across all accounts to get the "Overall Average Actual Daily Spend for May."
     * Calculate the sum of `Actual Daily average Last month MTD` across all accounts to get the "Overall Average Actual Daily Spend for Apr MTD."
     * Report these two absolute numbers and the difference between them (both absolute and percentage change).
     * Comment on the overall month-over-month trend in daily spending for the entire portfolio. Is the overall daily spend increasing or decreasing, and by how much?
 
 1.  **Key Spending Drivers & Material Anomalies (Based on Current Period Daily Average):**
-    * Using `Linked Account Name` and its corresponding ID (`Linked Account ID` or `Account Number`), identify accounts that are the most significant contributors (key drivers) to the `Actual Daily average May MTD`. This is not limited to a fixed number of accounts; focus on materiality.
+    * Using `Linked Account Name` and its corresponding ID (`Linked Account ID` or `Account Number`), identify accounts that are the most significant contributors (key drivers) to the `Actual Daily average May`. This is not limited to a fixed number of accounts; focus on materiality.
     * **Crucially, identify and highlight any anomalies in spending patterns across *all* accounts.** This includes accounts with historically low spend suddenly appearing high, disproportionate spend compared to their usual profile (if discernible from provided data or context), or any other unexpected deviations.
     * Comment on the concentration of spend: do a few accounts or categories disproportionately drive the total spend?
     * Analyze spending distribution by `Consumer/Merchant`, `Category`, `Allocation Type`, and `Billed to Entity`. Identify which segments are the largest contributors.
 
 2.  **Performance vs. AOP (Critical Focus on Top 15 Overages - Based on Current Period Daily Averages):**
-    * For each `Linked Account Name` (and its ID), compare its `Actual Daily average May MTD` directly with its `AOP Daily average May`.
-    * Calculate the variance as (`Actual Daily average May MTD` - `AOP Daily average May`). This is the "Actual vs AOP" daily variance. A positive value for this variance indicates that actual spend exceeded AOP.
+    * For each `Linked Account Name` (and its ID), compare its `Actual Daily average May` directly with its `AOP Daily average May`.
+    * Calculate the variance as (`Actual Daily average May` - `AOP Daily average May`). This is the "Actual vs AOP" daily variance. A positive value for this variance indicates that actual spend exceeded AOP. Do not include accounts which are well below the AOP.
     * **Your primary focus must be to identify and thoroughly analyze accounts where this "Actual vs AOP" daily variance is positive and significant. List strictly the top 15 such accounts [Sorted by Daily Variance (%) in descending], sorted in descending order by the magnitude of this positive "Actual vs AOP" daily variance (i.e., the accounts that have exceeded AOP by the largest daily dollar amount should be listed first). When determining significance for this top 15 list, consider both the absolute daily dollar amount of the overspend and the percentage by which the AOP was exceeded.**
     * Explain what makes these overages "significant" from a CFO's perspective (e.g., high percentage deviation leading to budget overrun, large absolute daily overspend impacting cash flow, consistent overspending trend, risk to financial targets).
     * If a 'Nature' or 'Category' column is available, summarize AOP overage performance at this category level for these top overspending accounts.
 
 3.  **Month-over-Month Spending Dynamics (Critical Focus on Sudden Hikes - Comparison of Daily Averages):**
-    * For each `Linked Account Name` (and its ID), compare its `Actual Daily average May MTD` with its `Actual Daily average Last month MTD`.
-    * **Your primary focus must be to identify and thoroughly analyze accounts exhibiting notable *increases* ("sudden hikes") in their daily spending average. When presenting these, sort them by the materiality of the hike, considering both absolute daily dollar increase and percentage increase. The most critical hikes should be highlighted first. This is not limited to a fixed number of accounts; focus on all material hikes.**
+    * For each `Linked Account Name` (and its ID), compare its `Actual Daily average May` with its `Actual Daily average Last month MTD`.
+    * **Must be atleast 5. Your primary focus must be to identify and thoroughly analyze accounts exhibiting notable *increases* ("sudden hikes") in their daily spending average. When presenting these, sort them by the materiality of the hike, considering both absolute daily dollar increase and percentage increase. The most critical hikes should be highlighted first. This is not limited to a fixed number of accounts; focus on all material hikes.**
     * Also, identify significant decreases if they represent material cost savings or operational changes, and highlight these if they are particularly impactful.
     * For these accounts (especially those with hikes), quantify the change (percentage and absolute daily average amount).
     * Explain the potential implications of these changes from a CFO's viewpoint (e.g., escalating costs requiring immediate control, unexpected budget pressures, but also positive cost management trends if decreases are significant).
@@ -110,40 +110,40 @@ Analyze the provided AWS Cost dataset to extract critical financial signals and 
 
 **Output Format:**
 Please present the findings in a structured manner, using tables for summaries and narrative explanations for insights and implications:
-* **Mention the max date for which costs are updated in the current month MTD file**
-* **Overall Spending Trend (Current Period MTD vs. Apr MTD - Daily Averages):**
-    * Overall Average Actual Daily Spend for Current Period MTD (e.g., May MTD): [`Calculated Sum`]
+* Max date when the current month MTD file was updated
+* **Overall Spending Trend (Current Period vs. Apr MTD - Daily Averages):**
+    * Overall Average Actual Daily Spend for Current Period (e.g., May): [`Calculated Sum`]
     * Overall Average Actual Daily Spend for Apr MTD (from `Actual Daily average Last month MTD`): [`Calculated Sum`]
-    * Difference (Current Period MTD - Apr MTD): [`Calculated Difference $ and %`]
+    * Difference (Current Period - Apr MTD): [`Calculated Difference $ and %`]
     * Commentary on the overall trend and its significance.
 
-* **Key Spending Drivers & Material Anomalies (Current Period MTD - Based on Daily Average):**
+* **Key Spending Drivers & Material Anomalies (Current Period - Based on Daily Average):**
     * List of key accounts (include `Linked Account ID` or `Account Number`) with their `Actual Daily average May` and `Actual Daily average Last month MTD` (for Apr MTD context), noting why they are highlighted.
     * Brief commentary on spending concentration.
     * **Spending Breakdown by Key Segments (Tables & Insights):**
         * **By Consumer/Merchant:**
-            | Consumer/Merchant Segment | Total Actual Daily Avg (May MTD) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
+            | Consumer/Merchant Segment | Total Actual Daily Avg (May) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
             |---------------------------|----------------------------------|--------------------------------------|--------------------|-------------------------|
             | ...                       | ...                              | ...                                  | ...                | ...                     |
             * Narrative highlighting top segments and concentration.
         * **By Category:**
-            | Category Segment          | Total Actual Daily Avg (May MTD) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
+            | Category Segment          | Total Actual Daily Avg (May) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
             |---------------------------|----------------------------------|--------------------------------------|--------------------|-------------------------|
             | ...                       | ...                              | ...                                  | ...                | ...                     |
             * Narrative highlighting top segments and concentration.
         * **By Allocation Type (`New Allocation(FY25) Direct / Common`):**
-            | Allocation Type           | Total Actual Daily Avg (May MTD) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
+            | Allocation Type           | Total Actual Daily Avg (May) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
             |---------------------------|----------------------------------|--------------------------------------|--------------------|-------------------------|
             | ...                       | ...                              | ...                                  | ...                | ...                     |
             * Narrative highlighting distribution.
         * **By Billed to Entity:**
-            | Billed to Entity Segment  | Total Actual Daily Avg (May MTD) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
+            | Billed to Entity Segment  | Total Actual Daily Avg (May) ($) | Total Actual Daily Avg (Apr MTD) ($) | % of Total May Spend | Observation/Implication |
             |---------------------------|----------------------------------|--------------------------------------|--------------------|-------------------------|
             | ...                       | ...                              | ...                                  | ...                | ...                     |
             * Narrative highlighting distribution.
 
 * **Performance vs. AOP (Top 15 Significant Overages - Current Period Daily Averages) (Table & Insights) [Sort in descending order of percentages] (Daily Variance (%) must be positive and very few negative which are less than -10%):**
-    | Linked Account ID / Account Number | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May MTD | AOP Daily Avg May | Actual Daily Avg Apr MTD (for context) | Daily Variance ($) (Actual - AOP) | Daily Variance (%) (Actual - AOP) | Key Observation/Implication (Focus on Material Overages) |
+    | Linked Account ID / Account Number | Linked Account Name | Category/Nature (if avail) | Actual Daily Avg May | AOP Daily Avg May | Actual Daily Avg Apr MTD (for context) | Daily Variance ($) (Actual - AOP) | Daily Variance (%) (Actual - AOP) | Key Observation/Implication (Focus on Material Overages) |
     |------------------------------------|---------------------|----------------------------|----------------------|-------------------|----------------------------------------|-----------------------------------|-----------------------------------|-------------------------------------------------------|
     | ...                                | ...                 | ...                        | ...                  | ...               | ...                                    | ...                               | ...                               | ...                                                   |
     * Narrative highlighting the **top 15 accounts strictly** with the most *material overages* against AOP daily averages, **sorted by the "Daily Variance ($) (Actual - AOP)" column in descending order (higher positive values first)**. Explain the financial impact and potential risks.
@@ -184,6 +184,7 @@ Please present the findings in a structured manner, using tables for summaries a
 * `Consumer/Merchant`, `Category`, `New Allocation(FY25) Direct / Common` (as 'Allocation Type'), `Billed to Entity`, `P&L`, `Owner`, or other similar category/nature columns should be actively used to enrich the analysis by identifying if trends are concentrated within specific segments.
 * **After providing the initial report, be prepared to answer follow-up questions from the user regarding the AWS cost data provided. You can elaborate on points from the report, perform different cuts of the data, or explore other aspects as long as it relates to the content of the uploaded file(s). Be open and flexible in addressing these subsequent queries.**
 """
+
 
 
 def get_openai_response(user_query, data_context):

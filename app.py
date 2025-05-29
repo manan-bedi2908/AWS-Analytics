@@ -406,7 +406,7 @@ if st.session_state.initial_report_generated and st.session_state.initial_report
                 email_body = "Please find the AWS analysis report attached as a PDF."
                 # Sending to specific To and Cc recipients
                 to_email = "manan.bedi@paytm.com"
-                # cc_email = "deepika.rawal@paytm.com"
+                cc_email = "deepika.rawal@paytm.com"
                 send_email_with_pdf_attachment(email_subject, email_body, to_email, cc_email, pdf_bytes, f"{st.session_state.uploaded_file_name_for_subject}_Report.pdf")
             else:
                 st.error("Failed to generate PDF for email.")

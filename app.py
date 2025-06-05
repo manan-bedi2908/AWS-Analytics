@@ -29,7 +29,7 @@ except Exception as e:
 
 
 # Streamlit app config
-st.set_page_config(page_title="📊 AWS Cost Analyzer", layout="wide") 
+st.set_page_config(page_title="📊 AWS Cost Analyzer", layout="wide")
 st.title("📊 AWS Cost Analyzer with Azure OpenAI")
 st.markdown("Upload your AWS Cost file, and the system will automatically generate initial insights. You can then ask follow-up questions.")
 
@@ -191,16 +191,16 @@ def get_openai_response(user_query, data_context):
     """Generates a response from Azure OpenAI based on the user query and data context."""
     messages = [{"role": "system", "content": SYS_PROMPT}]
     messages.append({"role": "user", "content": f"Here is the AWS Cost data I am referring to:\n{data_context}\n\nMy question: {user_query}"})
-    
+
     try:
         response = openai.ChatCompletion.create(
             engine=deployment_name,
             messages=messages,
             temperature=0.3,
-            max_tokens=4000 
+            max_tokens=4000
         )
         return response["choices"][0]["message"]["content"]
-    except openai.error.InvalidRequestError as e: 
+    except openai.error.InvalidRequestError as e:
         if "maximum context length" in str(e):
             st.error(f"❌ Error: The request was too long and exceeded the model's token limit. Please try with fewer selected sheets, a shorter question, or contact support. Details: {e}")
         else:
@@ -214,7 +214,7 @@ def create_pdf_from_markdown_v2(markdown_content, filename="report.pdf"):
     """Creates a PDF file from markdown content using xhtml2pdf for better table support."""
     try:
         html_content = markdown2.markdown(markdown_content, extras=["tables", "fenced-code-blocks", "code-friendly"])
-        
+
         html_with_style = f"""
         <html>
         <head>
@@ -239,14 +239,14 @@ def create_pdf_from_markdown_v2(markdown_content, filename="report.pdf"):
 
         pdf_file = io.BytesIO()
         pisa_status = pisa.CreatePDF(
-            io.StringIO(html_with_style), 
-            dest=pdf_file                  
+            io.StringIO(html_with_style),
+            dest=pdf_file
         )
 
         if pisa_status.err:
             st.error(f"Error during PDF creation (pisa): {pisa_status.err}")
             return None
-        
+
         pdf_file.seek(0)
         return pdf_file.getvalue()
 
@@ -270,9 +270,9 @@ def send_email_with_pdf_attachment(subject, body_text, to_recipient, cc_recipien
     if cc_recipient:
         msg['Cc'] = cc_recipient
     msg['Subject'] = subject
-    
+
     msg.attach(MIMEText(body_text, 'plain'))
-    
+
     if pdf_bytes:
         part = MIMEApplication(pdf_bytes, Name=pdf_filename)
         part['Content-Disposition'] = f'attachment; filename="{pdf_filename}"'
@@ -282,16 +282,16 @@ def send_email_with_pdf_attachment(subject, body_text, to_recipient, cc_recipien
 
     try:
         recipients_list = [to_recipient]
-        if cc_recipient:
-            recipients_list.append(cc_recipient)
-        
+        if cc_recipient: # cc_recipient can be a comma-separated string of emails
+            recipients_list.extend([email.strip() for email in cc_recipient.split(',')])
+
         display_recipients = ", ".join(filter(None, [to_recipient, cc_recipient]))
 
 
         with st.spinner(f"📧 Sending email with PDF to {display_recipients}..."):
             with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
                 server.login(sender_email, sender_password)
-                server.send_message(msg) # send_message handles To and Cc correctly
+                server.send_message(msg) # send_message handles To and Cc correctly from headers
         st.success(f"📧 Email with PDF sent successfully to {display_recipients}!")
         return True
     except Exception as e:
@@ -305,19 +305,19 @@ uploaded_file = st.file_uploader("Upload your AWS Cost file (.csv or .xlsx)", ty
 
 if uploaded_file:
     if st.session_state.get('uploaded_file_name_for_subject') != uploaded_file.name:
-        st.session_state.file_data = {} 
+        st.session_state.file_data = {}
         st.session_state.initial_report_generated = False
         st.session_state.initial_report_content = ""
-        st.session_state.conversation_history = [] 
+        st.session_state.conversation_history = []
         st.session_state.selected_sheets_for_report = []
-        st.session_state.uploaded_file_name_for_subject = uploaded_file.name 
+        st.session_state.uploaded_file_name_for_subject = uploaded_file.name
         st.info("New file detected. Session has been reset for new analysis.")
 
     if not st.session_state.file_data or st.session_state.uploaded_file_name_for_subject == uploaded_file.name:
         try:
-            uploaded_file.seek(0) 
+            uploaded_file.seek(0)
             filename = uploaded_file.name.lower()
-            current_file_data_temp = {} 
+            current_file_data_temp = {}
 
             if filename.endswith(".csv"):
                 df = pd.read_csv(uploaded_file)
@@ -328,57 +328,57 @@ if uploaded_file:
                     sheet_name: xls.parse(sheet_name)
                     for sheet_name in xls.sheet_names
                 }
-            else: 
+            else:
                 raise ValueError("Unsupported file format.")
-            
-            st.session_state.file_data = current_file_data_temp 
+
+            st.session_state.file_data = current_file_data_temp
             st.success(f"✅ File '{uploaded_file.name}' loaded with {len(st.session_state.file_data)} sheet(s).")
 
         except Exception as e:
             st.error(f"❌ Error reading file: {e}")
-            st.session_state.file_data = {} 
+            st.session_state.file_data = {}
             st.session_state.initial_report_generated = False
 
 if st.session_state.file_data:
     sheet_names = list(st.session_state.file_data.keys())
-    
+
     if 'selected_sheets_multiselect' not in st.session_state:
         st.session_state.selected_sheets_multiselect = [sheet_names[0]] if sheet_names else []
 
     selected_sheets = st.multiselect(
         "📌 Select sheet(s) to analyze",
         options=sheet_names,
-        default=st.session_state.selected_sheets_multiselect, 
+        default=st.session_state.selected_sheets_multiselect,
     )
-    st.session_state.selected_sheets_multiselect = selected_sheets 
+    st.session_state.selected_sheets_multiselect = selected_sheets
 
     if selected_sheets:
         if selected_sheets != st.session_state.selected_sheets_for_report:
             st.session_state.selected_sheets_for_report = selected_sheets
-            st.session_state.initial_report_generated = False 
+            st.session_state.initial_report_generated = False
             st.session_state.initial_report_content = ""
-            st.session_state.conversation_history = [] 
+            st.session_state.conversation_history = []
             st.info("Sheet selection changed. Initial report will regenerate. Conversation history reset.")
 
         for sheet in selected_sheets:
             with st.expander(f"📄 Preview: `{sheet}` (Top 10 rows)"):
                 st.dataframe(st.session_state.file_data[sheet].head(10))
-        
+
         if not st.session_state.initial_report_generated and st.session_state.selected_sheets_for_report:
             with st.spinner("🤖 Generating initial insights report... This may take a moment."):
                 combined_text_for_initial_report = ""
                 for sheet_name in st.session_state.selected_sheets_for_report:
                     if sheet_name in st.session_state.file_data:
-                        df = st.session_state.file_data[sheet_name].head(1000)  
+                        df = st.session_state.file_data[sheet_name].head(1000)
                         df_text = df.to_string(index=False)
                         combined_text_for_initial_report += f"\n--- Data from Sheet: {sheet_name} ---\n{df_text}\n--- End of Sheet: {sheet_name} ---\n"
                     else:
                         st.warning(f"Sheet '{sheet_name}' not found in loaded data. Skipping for initial report.")
-                
-                if combined_text_for_initial_report: 
+
+                if combined_text_for_initial_report:
                     initial_query = "Generate insights from the data based on the system prompt provided."
                     report_content = get_openai_response(initial_query, combined_text_for_initial_report)
-                    
+
                     if report_content:
                         st.session_state.initial_report_content = report_content
                         st.session_state.initial_report_generated = True
@@ -395,20 +395,22 @@ st.subheader("💬 AI Insights & Chat")
 
 if st.session_state.initial_report_generated and st.session_state.initial_report_content:
     st.markdown("### 🚀 Initial Insights Report")
-    with st.container(height=400, border=True): 
+    with st.container(height=400, border=True):
         st.markdown(st.session_state.initial_report_content)
-    
+
     # Modified button text
     if st.button("📧 Email Initial Report (PDF) to Finance Team"):
         if st.session_state.initial_report_content:
-            pdf_bytes = create_pdf_from_markdown_v2(st.session_state.initial_report_content) 
+            pdf_bytes = create_pdf_from_markdown_v2(st.session_state.initial_report_content)
             if pdf_bytes:
                 email_subject = f"AWS Cost Summary"
                 email_body = "Please find the AWS analysis report attached as a PDF."
                 # Sending to specific To and Cc recipients
                 to_email = "manan.bedi@paytm.com"
-                cc_email = "deepika.rawal@paytm.com"
-                send_email_with_pdf_attachment(email_subject, email_body, to_email, cc_email, pdf_bytes, f"{st.session_state.uploaded_file_name_for_subject}_Report.pdf")
+                # MODIFICATION 1: Add sharjeel@paytm.com to CC
+                cc_email = "deepika.rawal@paytm.com, sharjeel@paytm.com"
+                # MODIFICATION 2: Change PDF attachment name
+                send_email_with_pdf_attachment(email_subject, email_body, to_email, cc_email, pdf_bytes, "insights.pdf")
             else:
                 st.error("Failed to generate PDF for email.")
         else:
@@ -418,7 +420,7 @@ if st.session_state.initial_report_generated and st.session_state.initial_report
 if st.session_state.conversation_history:
     with st.expander("📜 View Conversation History", expanded=False):
         history_container_key = f"history_container_{len(st.session_state.conversation_history)}"
-        with st.container(height=300, border=True): 
+        with st.container(height=300, border=True):
             for i, msg in enumerate(st.session_state.conversation_history):
                 role_emoji = "👤" if msg["role"] == "user" else "🤖"
                 with st.chat_message(msg["role"], avatar=role_emoji):
@@ -432,11 +434,11 @@ if st.session_state.file_data and st.session_state.selected_sheets_for_report:
     if user_question:
         combined_text_for_chat = ""
         for sheet_name in st.session_state.selected_sheets_for_report:
-             if sheet_name in st.session_state.file_data:
-                df = st.session_state.file_data[sheet_name].head(1000)  
-                df_text = df.to_string(index=False)
-                combined_text_for_chat += f"\n--- Data from Sheet: {sheet_name} ---\n{df_text}\n--- End of Sheet: {sheet_name} ---\n"
-        
+                if sheet_name in st.session_state.file_data:
+                    df = st.session_state.file_data[sheet_name].head(1000)
+                    df_text = df.to_string(index=False)
+                    combined_text_for_chat += f"\n--- Data from Sheet: {sheet_name} ---\n{df_text}\n--- End of Sheet: {sheet_name} ---\n"
+
         if not combined_text_for_chat:
             st.warning("No data from selected sheets to provide context for the question. Please select valid sheets.")
         else:
@@ -449,9 +451,8 @@ if st.session_state.file_data and st.session_state.selected_sheets_for_report:
                     if st.session_state.conversation_history and st.session_state.conversation_history[-1]["role"] == "user":
                         st.session_state.conversation_history.pop()
                         st.warning("Failed to get a response from the AI. Your question was not processed.")
-            st.rerun() 
+            st.rerun()
 elif not st.session_state.file_data:
     st.info("☝️ Please upload a AWS Cost file to begin analysis.")
-else: 
+else:
     st.warning("Please select at least one sheet to enable chat and initial report generation.")
-

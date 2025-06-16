@@ -210,6 +210,7 @@ def get_openai_response(user_query, data_context):
         st.error(f"❌ Error communicating with Azure OpenAI: {e}")
         return None
 
+# This function is kept for PDF generation if needed elsewhere, but not used for the email body scenario.
 def create_pdf_from_markdown_v2(markdown_content, filename="report.pdf"):
     """Creates a PDF file from markdown content using xhtml2pdf for better table support."""
     try:
@@ -255,8 +256,12 @@ def create_pdf_from_markdown_v2(markdown_content, filename="report.pdf"):
         return None
 
 
-def send_email_with_pdf_attachment(subject, body_text, to_recipient, cc_recipient, pdf_bytes, pdf_filename="report.pdf"):
-    """Sends an email with a PDF attachment using Gmail SMTP."""
+# MODIFICATION: The function now expects body_text to be HTML if no PDF is attached.
+# If pdf_bytes is None, body_text is assumed to be HTML.
+# If pdf_bytes is provided, body_text is plain and PDF is an attachment.
+def send_email_with_report_content(subject, body_content, to_recipient, cc_recipient, is_html_body=True, pdf_bytes=None, pdf_filename="report.pdf"):
+    """Sends an email. If pdf_bytes is provided, it's an attachment and body_content is plain text.
+       If pdf_bytes is None, body_content is the main email content (HTML or plain based on is_html_body)."""
     try:
         sender_email = st.secrets["GMAIL_SENDER_EMAIL"]
         sender_password = st.secrets["GMAIL_SENDER_APP_PASSWORD"]
@@ -271,14 +276,18 @@ def send_email_with_pdf_attachment(subject, body_text, to_recipient, cc_recipien
         msg['Cc'] = cc_recipient
     msg['Subject'] = subject
 
-    msg.attach(MIMEText(body_text, 'plain'))
+    if is_html_body:
+        msg.attach(MIMEText(body_content, 'html'))
+    else:
+        msg.attach(MIMEText(body_content, 'plain'))
 
-    if pdf_bytes:
+    if pdf_bytes: # Attach PDF if provided
         part = MIMEApplication(pdf_bytes, Name=pdf_filename)
         part['Content-Disposition'] = f'attachment; filename="{pdf_filename}"'
         msg.attach(part)
-    else:
-        st.warning("No PDF content to attach. Email will be sent without PDF.")
+    elif not is_html_body and not pdf_bytes : # Warning if sending plain text body without attachment (original simple case)
+        st.info("Email sent with plain text body and no PDF attachment.")
+
 
     try:
         recipients_list = [to_recipient]
@@ -287,15 +296,14 @@ def send_email_with_pdf_attachment(subject, body_text, to_recipient, cc_recipien
 
         display_recipients = ", ".join(filter(None, [to_recipient, cc_recipient]))
 
-
-        with st.spinner(f"📧 Sending email with PDF to {display_recipients}..."):
+        with st.spinner(f"📧 Sending email to {display_recipients}..."):
             with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
                 server.login(sender_email, sender_password)
                 server.send_message(msg) # send_message handles To and Cc correctly from headers
-        st.success(f"📧 Email with PDF sent successfully to {display_recipients}!")
+        st.success(f"📧 Email sent successfully to {display_recipients}!")
         return True
     except Exception as e:
-        st.error(f"❌ Failed to send email with PDF: {e}")
+        st.error(f"❌ Failed to send email: {e}")
         return False
 
 # --- UI Layout ---
@@ -398,21 +406,50 @@ if st.session_state.initial_report_generated and st.session_state.initial_report
     with st.container(height=400, border=True):
         st.markdown(st.session_state.initial_report_content)
 
-    # Modified button text
-    if st.button("📧 Email Initial Report (PDF) to Finance Team"):
+    # MODIFICATION: Updated button text
+    if st.button("📧 Email Initial Report (HTML Body) to Finance Team"):
         if st.session_state.initial_report_content:
-            pdf_bytes = create_pdf_from_markdown_v2(st.session_state.initial_report_content)
-            if pdf_bytes:
-                email_subject = f"AWS Cost Summary"
-                email_body = "Please find the AWS analysis report attached as a PDF."
-                # Sending to specific To and Cc recipients
-                to_email = "manan.bedi@paytm.com"
-                # MODIFICATION 1: Add sharjeel@paytm.com to CC
-                cc_email = "deepika.rawal@paytm.com, sharjeel@paytm.com"
-                # MODIFICATION 2: Change PDF attachment name
-                send_email_with_pdf_attachment(email_subject, email_body, to_email, cc_email, pdf_bytes, "insights.pdf")
-            else:
-                st.error("Failed to generate PDF for email.")
+            report_markdown = st.session_state.initial_report_content
+            # Convert markdown to basic HTML for the email body
+            html_report_part = markdown2.markdown(report_markdown, extras=["tables", "fenced-code-blocks", "code-friendly"])
+
+            # Construct full HTML email body with styles (borrowed from PDF generation for consistency)
+            email_html_body_content = f"""
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body {{ font-family: Arial, sans-serif; font-size: 10pt; line-height: 1.6; }}
+                    table {{ border-collapse: collapse; width: 100%; margin-bottom: 1em; }} /* Email clients might handle width differently, 100% can be wide */
+                    th, td {{ border: 1px solid #dddddd; text-align: left; padding: 8px; }}
+                    th {{ background-color: #f2f2f2; font-weight: bold; }}
+                    pre {{ background-color: #f5f5f5; border: 1px solid #ccc; padding: 10px; white-space: pre-wrap; word-wrap: break-word; }}
+                    code {{ font-family: monospace; }}
+                    h1 {{ font-size: 18pt; }}
+                    h2 {{ font-size: 16pt; }}
+                    h3 {{ font-size: 14pt; }}
+                </style>
+            </head>
+            <body>
+                {html_report_part}
+            </body>
+            </html>
+            """
+
+            email_subject = f"AWS Cost Summary"
+            to_email = "manan.bedi@paytm.com"
+            cc_email = "deepika.rawal@paytm.com,sharjeel@paytm.com"
+
+            # MODIFICATION: Call the renamed/refactored email function
+            # Pass the HTML content as the body, is_html_body=True, and pdf_bytes=None
+            send_email_with_report_content(
+                subject=email_subject,
+                body_content=email_html_body_content,
+                to_recipient=to_email,
+                cc_recipient=cc_email,
+                is_html_body=True,
+                pdf_bytes=None # No PDF attachment
+            )
         else:
             st.warning("No report content available to email.")
     st.divider()
